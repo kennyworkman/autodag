@@ -15,6 +15,7 @@ from contextlib import contextmanager
 
 from .util import subvals, wraps
 
+
 def trace(start_node, fun, x):
     with trace_stack.new_trace() as trace_id:
         # Wrap 'x' in a box.
@@ -32,8 +33,10 @@ def trace(start_node, fun, x):
             # Output seems independent of input
             return end_box, None
 
+
 class Node(object):
     """A node in a computation graph."""
+
     def __init__(self, value, fun, args, kwargs, parent_argnums, parents):
         """
 
@@ -48,16 +51,20 @@ class Node(object):
         """
         self.parents = parents
         self.recipe = (fun, value, args, kwargs, parent_argnums)
+        # Workaround for visualization construction
+        self.children = []
 
-    def initialize_root(self):
+    def initialize_root(self, value):
         self.parents = []
-        self.recipe = (lambda x: x, None, (), {}, [])
+        self.recipe = (lambda x: x, value, (), {}, [])
+        self.children = []
 
     @classmethod
-    def new_root(cls, *args, **kwargs):
+    def new_root(cls, value, *args, **kwargs):
         root = cls.__new__(cls)
-        root.initialize_root(*args, **kwargs)
+        root.initialize_root(value, *args, **kwargs)
         return root
+
 
 def primitive(f_raw):
     """Wraps a function so that its gradient (vjp) can be specified and its
@@ -70,7 +77,8 @@ def primitive(f_raw):
         boxed_args, trace_id = find_top_boxed_args(args)
         if boxed_args:
             # Replace some elements of args with corresponding unboxed values.
-            argvals = subvals(args, [(argnum, box._value) for argnum, box in boxed_args])
+            argvals = subvals(args, [(argnum, box._value)
+                                     for argnum, box in boxed_args])
             # Get nodes for each boxed argument.
             parents = tuple(box._node for _, box in boxed_args)
 
@@ -90,6 +98,7 @@ def primitive(f_raw):
         else:
             return f_raw(*args, **kwargs)
     return f_wrapped
+
 
 def notrace_primitive(f_raw):
     """Wrap a raw numpy function by discarding boxes.
@@ -114,6 +123,7 @@ def notrace_primitive(f_raw):
         # boxed, but with a lower trace_id.
         return f_raw(*argvals, **kwargs)
     return f_wrapped
+
 
 def find_top_boxed_args(args):
     """Finds boxed arguments with largest trace_id.
@@ -140,6 +150,7 @@ def find_top_boxed_args(args):
                 top_boxes.append((argnum, arg))
     return top_boxes, top_trace_id
 
+
 class TraceStack(object):
     """Tracks number of times trace() has been called.
 
@@ -162,6 +173,7 @@ class TraceStack(object):
     np.multipy(Box(5.), Box(Box(5.))? Because the second argument has a larger
     trace_id than the former!
     """
+
     def __init__(self):
         self.top = -1
 
@@ -172,7 +184,9 @@ class TraceStack(object):
         yield self.top
         self.top -= 1
 
+
 trace_stack = TraceStack()
+
 
 class Box(object):
     """Boxes a value within a computation graph."""
@@ -219,6 +233,7 @@ class Box(object):
 
 box_type_mappings = Box.type_mappings
 
+
 def new_box(value, trace_id, node):
     """Box an unboxed value.
 
@@ -233,12 +248,19 @@ def new_box(value, trace_id, node):
     try:
         return box_type_mappings[type(value)](value, trace_id, node)
     except KeyError:
-        raise TypeError("Can't differentiate w.r.t. type {}".format(type(value)))
+        raise TypeError(
+            "Can't differentiate w.r.t. type {}".format(type(value)))
+
 
 box_types = Box.types
 
 # If True, the value is Box.
-isbox  = lambda x: type(x) in box_types  # almost 3X faster than isinstance(x, Box)
+
+
+# almost 3X faster than isinstance(x, Box)
+def isbox(x): return type(x) in box_types
 
 # Get value from a Box.
-getval = lambda x: getval(x._value) if isbox(x) else x
+
+
+def getval(x): return getval(x._value) if isbox(x) else x

@@ -1,1 +1,1 @@
-from .differential_operators import make_vjp, grad
+from .differential_operators import make_vjp, grad, visualize

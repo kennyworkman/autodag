@@ -11,11 +11,13 @@ one can,
 from collections import defaultdict
 from itertools import count
 import numpy as np
+import graphterm as gt
 
 from .tracer import trace, Node
 from .util import toposort
 
-def make_vjp(fun, x):
+
+def make_vjp(fun, x, visualize=False):
     """Make function for vector-Jacobian product.
 
     Args:
@@ -27,13 +29,17 @@ def make_vjp(fun, x):
       end_value: end_value = fun(start_node)
 
     """
-    start_node = Node.new_root()
+    start_node = Node.new_root(x)
     end_value, end_node = trace(start_node, fun, x)
     if end_node is None:
         def vjp(g): return np.zeros_like(x)
     else:
-        def vjp(g): return backward_pass(g, end_node)
+        if not visualize:
+            def vjp(g): return backward_pass(g, end_node)
+        else:
+            def vjp(g): return visualize_backward_pass(g, end_node)
     return vjp, end_value
+
 
 def backward_pass(g, end_node):
     """Backpropagation.
@@ -59,13 +65,69 @@ def backward_pass(g, end_node):
             outgrads[parent] = add_outgrads(outgrads.get(parent), parent_grad)
     return outgrad
 
+
+def visualize_backward_pass(g, end_node):
+    """Backpropagation with DAG graphs.
+
+    Traverse computation graph backwards in topological order from the end node.
+    For each node, compute local gradient contribution and accumulate, creating
+    DAG nodes along the way.
+    """
+    outgrads = {end_node: g}
+    forward_dag = gt.TermDAG()
+    backward_dag = gt.TermDAG()
+    for i, node in enumerate(toposort(end_node)):
+        outgrad = outgrads.pop(node)
+        fun, value, args, kwargs, argnums = node.recipe
+
+        if not i:
+            forward_dag.add_node(str(value))
+            backward_dag.add_node(str(outgrad))
+        else:
+            backward_dag.add_node(str(outgrad))
+            for child in node.children:
+                backward_dag.add_link(str(outgrad), child)
+
+        for argnum, parent in zip(argnums, node.parents):
+            # Forge DAG link.
+            forward_dag.add_node(str(parent.recipe[1]))
+            forward_dag.add_link(str(value), str(parent.recipe[1]))
+
+            # Lookup vector-Jacobian product (gradient) function for this
+            # function/argument.
+            vjp = primitive_vjps[fun][argnum]
+
+            # Compute vector-Jacobian product (gradient) contribution due to
+            # parent node's use in this function.
+            parent_grad = vjp(outgrad, value, *args, **kwargs)
+
+            parent.children.append(str(outgrad))
+
+            # Save vector-Jacobian product (gradient) for upstream nodes.
+            # Sum contributions with all others also using parent's output.
+            outgrads[parent] = add_outgrads(outgrads.get(parent), parent_grad)
+
+    print("Forward pass...")
+    print("Showing computed function values:")
+    print("\n")
+    forward_dag.printonly()
+    print("Backward pass...")
+    print("Showing Jacobian-vector products:")
+    print("\n")
+    backward_dag.printonly()
+    return outgrad
+
+
 def add_outgrads(prev_g, g):
     """Add gradient contributions together."""
     if prev_g is None:
         return g
     return prev_g + g
 
+
 primitive_vjps = defaultdict(dict)
+
+
 def defvjp(fun, *vjps, **kwargs):
     """Register vector-Jacobian product functions.
 
